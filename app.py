@@ -10,7 +10,7 @@ import base64
 import pandas as pd
 from nltk.corpus import stopwords
 from nltk.sentiment import SentimentIntensityAnalyzer
-from nltk.tokenize import word_tokenize
+from nltk.tokenize import PunktSentenceTokenizer, TreebankWordTokenizer
 from data_fetching import yahoo_data, market_news, reddit_data
 import nltk
 import time
@@ -25,7 +25,7 @@ from sklearn.metrics.pairwise import cosine_similarity
 app = Flask(__name__, static_folder="build", static_url_path="/")
 CORS(app)
 
-# ------------------- NLTK Setup -------------------
+# ------------------- NLTK Downloads -------------------
 nltk_data_path = "/tmp/nltk_data"
 os.makedirs(nltk_data_path, exist_ok=True)
 nltk.data.path.append(nltk_data_path)
@@ -36,13 +36,25 @@ for resource in ["punkt", "stopwords", "vader_lexicon"]:
     except LookupError:
         nltk.download(resource, download_dir=nltk_data_path)
 
-# Safe word tokenize wrapper
+# Initialize tokenizers
+try:
+    sent_tokenizer = PunktSentenceTokenizer()
+except LookupError:
+    nltk.download("punkt", download_dir=nltk_data_path)
+    sent_tokenizer = PunktSentenceTokenizer()
+
+word_tokenizer = TreebankWordTokenizer()
+
 def safe_word_tokenize(text):
     try:
-        return word_tokenize(text, language="english")
-    except LookupError:
-        nltk.download("punkt", download_dir=nltk_data_path)
-        return word_tokenize(text, language="english")
+        tokens = []
+        sentences = sent_tokenizer.tokenize(text)
+        for sent in sentences:
+            tokens.extend(word_tokenizer.tokenize(sent))
+        return tokens
+    except Exception as e:
+        print("NLTK tokenize error:", e)
+        return text.split()  # fallback
 
 # ------------------- In-memory History -------------------
 HISTORY = defaultdict(lambda: {"volumes": [], "prices": [], "timestamps": []})
@@ -64,7 +76,8 @@ def update_history(yahoo_dict):
 # ------------------- Utility Functions -------------------
 def zscore(arr):
     arr = np.array(arr, dtype=float)
-    if arr.size < 2: return 0.0
+    if arr.size < 2:
+        return 0.0
     mu = arr.mean()
     sigma = arr.std(ddof=0)
     return float((arr[-1] - mu) / (sigma if sigma != 0 else 1.0))
@@ -78,7 +91,8 @@ def detect_volume_spike(ticker):
 
 def detect_price_jump(ticker):
     prices = rolling_series(HISTORY[ticker]["prices"], 20)
-    if len(prices) < 2 or prices[-2]==0: return 0.0
+    if len(prices) < 2 or prices[-2]==0:
+        return 0.0
     pct = (prices[-1] - prices[-2])/prices[-2]
     returns = np.diff(prices)/np.where(np.array(prices[:-1])==0,1,np.array(prices[:-1]))
     vol = float(np.std(returns)) if returns.size>1 else 0.0
@@ -86,11 +100,13 @@ def detect_price_jump(ticker):
 
 def detect_price_volume_divergence(ticker, yahoo_record):
     vols = rolling_series(HISTORY[ticker]["volumes"], 20)
-    if not vols: return 0.0
+    if not vols:
+        return 0.0
     avg_vol = float(np.mean(vols))
     pct_change = float(yahoo_record.get("pct_change",0) or 0)
     vol = float(yahoo_record.get("volume",0) or 0)
-    if avg_vol == 0: return 0.0
+    if avg_vol == 0:
+        return 0.0
     vol_ratio = vol / avg_vol
     divergence = 0.0
     if abs(pct_change) > 2.0 and vol_ratio < 0.5:
@@ -109,7 +125,8 @@ def detect_social_hype(ticker, news_list, reddit_list):
     return min(1.0, mention_count/20.0), texts
 
 def detect_message_coordination(texts):
-    if not texts or len(texts)<2: return 0.0
+    if not texts or len(texts)<2:
+        return 0.0
     try:
         vectorizer = TfidfVectorizer(max_features=500, stop_words="english")
         X = vectorizer.fit_transform(texts)
@@ -119,9 +136,11 @@ def detect_message_coordination(texts):
         for i in range(n):
             for j in range(i+1,n):
                 total+=1
-                if sim[i,j]>0.8: high+=1
+                if sim[i,j]>0.8:
+                    high+=1
         return float(high/total) if total else 0.0
-    except: return 0.0
+    except:
+        return 0.0
 
 def compute_manipulation_signals(yahoo_dict, news_list, reddit_list):
     update_history(yahoo_dict)
@@ -170,9 +189,12 @@ def generate_wordcloud():
     filtered_text = " ".join(tokens) or "No data available"
 
     compound = sia.polarity_scores(filtered_text)["compound"]
-    if compound>=0.05: sentiment="Positive"
-    elif compound<=-0.05: sentiment="Negative"
-    else: sentiment="Neutral"
+    if compound>=0.05:
+        sentiment="Positive"
+    elif compound<=-0.05:
+        sentiment="Negative"
+    else:
+        sentiment="Neutral"
 
     wc = WordCloud(width=800,height=400,background_color="white",max_words=200,random_state=int(time.time()))
     wc.generate(filtered_text)
@@ -181,6 +203,7 @@ def generate_wordcloud():
     wc.to_image().save(buf, format="PNG")
     buf.seek(0)
     img_base64 = base64.b64encode(buf.read()).decode("utf-8")
+
     return img_base64, sentiment
 
 # ------------------- Yahoo Graph -------------------
@@ -198,9 +221,12 @@ def generate_yahoo_graph():
         ax.plot([0,1],[0,sentiment],marker="o",linestyle="-",label=stock)
 
     avg_sentiment = sum(sentiments)/len(sentiments) if sentiments else 0
-    if avg_sentiment>=0.05: overall="Positive"
-    elif avg_sentiment<=-0.05: overall="Negative"
-    else: overall="Neutral"
+    if avg_sentiment>=0.05:
+        overall="Positive"
+    elif avg_sentiment<=-0.05:
+        overall="Negative"
+    else:
+        overall="Neutral"
 
     ax.set_xlabel("Updates")
     ax.set_ylabel("Sentiment Score")
@@ -214,6 +240,7 @@ def generate_yahoo_graph():
     buf.seek(0)
     img_base64 = base64.b64encode(buf.read()).decode("utf-8")
     plt.close(fig)
+
     return img_base64, overall
 
 # ------------------- API Endpoint -------------------
