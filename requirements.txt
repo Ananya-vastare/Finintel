@@ -1,2 +1,5 @@
-pip install -r requirements.txt
-python api.py
+Flask
+gunicorn
+python-dotenv
+pandas
+requests
